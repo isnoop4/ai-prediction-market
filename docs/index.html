@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Prediction Market · GenLayer</title>
+<style>
+  :root{--bg:#0d0f14;--card:#171a22;--line:#262b38;--tx:#e8eaf0;--mut:#8a91a3;--yes:#2ecc8f;--no:#ff5c6c;--acc:#7c6cff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:16px}
+  h1{font-size:20px;margin:8px 0}
+  .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  input,textarea{width:100%;background:#0f1218;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:9px;font:inherit;margin:4px 0}
+  button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer}
+  button.yes{background:var(--yes);color:#04140d}button.no{background:var(--no)}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--tx)}
+  button:disabled{opacity:.5;cursor:wait}
+  .mut{color:var(--mut);font-size:13px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .badge{padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+  .badge.YES{color:var(--yes);border-color:var(--yes)}.badge.NO{color:var(--no);border-color:var(--no)}
+  .meter{height:8px;border-radius:99px;background:var(--no);overflow:hidden;margin:8px 0}
+  .meter i{display:block;height:100%;background:var(--yes)}
+  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#000;border:1px solid var(--line);padding:10px 16px;border-radius:10px;display:none;max-width:90%}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <h1>🔮 AI Prediction Market</h1>
+    <div class="row"><span class="mut" id="acct"></span><b id="bal">0</b> <span class="mut">poin</span>
+      <button class="ghost" id="faucet">Faucet</button></div>
+  </div>
+
+  <div class="card">
+    <div class="mut">Alamat kontrak (Studionet)</div>
+    <div class="row"><input id="addr" placeholder="0x..." style="flex:1"><button id="saveAddr">Simpan</button></div>
+  </div>
+
+  <div class="card">
+    <b>Buat market</b>
+    <input id="q" placeholder="Pertanyaan (mis. Apakah BTC > $100k pada 1 Des 2026?)">
+    <input id="url" placeholder="URL sumber bukti (https://...)">
+    <textarea id="crit" rows="2" placeholder="Kriteria resolusi (opsional)"></textarea>
+    <button id="create">Buat</button>
+  </div>
+
+  <div class="row" style="justify-content:space-between;margin:8px 0">
+    <b>Daftar market</b><button class="ghost" id="reload">Refresh</button>
+  </div>
+  <div id="list"><div class="mut">Isi alamat kontrak dulu.</div></div>
+</div>
+<div id="toast"></div>
+
+<script type="module">
+import { createClient, createAccount } from "https://esm.sh/genlayer-js";
+import { studionet } from "https://esm.sh/genlayer-js/chains";
+
+const $ = id => document.getElementById(id);
+const toast = (t, ms=4000) => { const e=$("toast"); e.textContent=t; e.style.display="block"; clearTimeout(toast.t); toast.t=setTimeout(()=>e.style.display="none",ms); };
+
+// Akun lokal (disimpan di browser; hanya untuk testnet)
+let pk = localStorage.getItem("apm_pk");
+if (!pk) { const a = createAccount(); pk = a.privateKey ?? null; }
+const account = pk ? createAccount(pk) : createAccount();
+if (!localStorage.getItem("apm_pk") && account.privateKey) localStorage.setItem("apm_pk", account.privateKey);
+const me = account.address;
+$("acct").textContent = me.slice(0,6)+"…"+me.slice(-4);
+
+const client = createClient({ chain: studionet, account });
+const DEFAULT_ADDR = "0x03eF48a8Fb6f949d7fecD24Be0F7b68fDCFb1fc6";
+let ADDR = localStorage.getItem("apm_addr2") || DEFAULT_ADDR;
+$("addr").value = ADDR;
+
+const read = (fn, args=[]) => client.readContract({ address: ADDR, functionName: fn, args });
+async function write(fn, args=[], label="Transaksi") {
+  if (!ADDR) return toast("Isi alamat kontrak dulu");
+  const btns=[...document.querySelectorAll("button")]; btns.forEach(b=>b.disabled=true);
+  try {
+    toast(label+" dikirim…", 60000);
+    const hash = await client.writeContract({ address: ADDR, functionName: fn, args, value: 0n });
+    await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 120, interval: 3000 });
+    toast(label+" berhasil ✓");
+  } catch (e) { toast("Gagal: "+(e.shortMessage||e.message||e), 7000); }
+  finally { btns.forEach(b=>b.disabled=false); await refresh(); }
+}
+
+async function refresh() {
+  if (!ADDR) return;
+  try {
+    $("bal").textContent = String(await read("get_balance", [me]));
+    const ms = JSON.parse(await read("get_markets"));
+    render(ms.reverse());
+  } catch (e) { toast("Gagal memuat: "+(e.shortMessage||e.message), 6000); }
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function render(ms) {
+  if (!ms.length) { $("list").innerHTML = '<div class="mut">Belum ada market.</div>'; return; }
+  const parts = await Promise.all(ms.map(async m => {
+    const tot = m.yes_pool + m.no_pool;
+    const pct = tot ? Math.round(m.yes_pool/tot*100) : 50;
+    let pos = {yes:0,no:0,claimed:0};
+    try { pos = JSON.parse(await read("get_position", [m.id, me])); } catch {}
+    const open = m.status === "OPEN";
+    return `<div class="card">
+      <div class="row" style="justify-content:space-between">
+        <b>#${m.id} ${esc(m.question)}</b>
+        <span class="badge ${m.outcome}">${open ? "OPEN" : m.outcome}</span></div>
+      <div class="mut"><a href="${esc(m.url)}" target="_blank" rel="noopener">sumber bukti</a>${m.criteria ? " · "+esc(m.criteria) : ""}</div>
+      <div class="meter"><i style="width:${pct}%"></i></div>
+      <div class="row mut"><span>YES ${m.yes_pool} (${pct}%)</span><span>NO ${m.no_pool}</span><span>Posisi kamu: Y ${pos.yes} / N ${pos.no}</span></div>
+      ${open ? `<div class="row" style="margin-top:8px">
+        <input id="amt-${m.id}" type="number" min="1" value="100" style="width:100px">
+        <button class="yes" data-a="bet" data-id="${m.id}" data-s="YES">YES</button>
+        <button class="no" data-a="bet" data-id="${m.id}" data-s="NO">NO</button>
+        <button class="ghost" data-a="resolve" data-id="${m.id}">Resolve (AI)</button></div>`
+      : `<div class="mut" style="margin-top:6px">AI (${m.confidence}%): ${esc(m.reason)}</div>
+         ${m.evidence ? `<div class="mut" style="margin-top:4px">Evidence ${m.evidence_verified ? "✓ found on page" : "⚠ not found on page"}: “${esc(m.evidence)}”</div>` : ""}
+         <button data-a="claim" data-id="${m.id}" style="margin-top:6px">Klaim</button>`}
+    </div>`;
+  }));
+  $("list").innerHTML = parts.join("");
+}
+
+$("list").addEventListener("click", e => {
+  const b = e.target.closest("button[data-a]"); if (!b) return;
+  const id = b.dataset.id;
+  if (b.dataset.a === "bet") {
+    const amt = parseInt($("amt-"+id).value || "0");
+    write("bet", [id, b.dataset.s, amt], "Bet "+b.dataset.s);
+  } else if (b.dataset.a === "resolve") {
+    toast("AI sedang menilai bukti… (bisa 1–2 menit)", 90000);
+    write("resolve_market", [id], "Resolve");
+  } else write("claim", [id], "Klaim");
+});
+
+$("saveAddr").onclick = () => { ADDR = $("addr").value.trim(); localStorage.setItem("apm_addr2", ADDR); refresh(); };
+$("faucet").onclick = () => write("claim_faucet", [], "Faucet");
+$("reload").onclick = refresh;
+$("create").onclick = async () => {
+  const q=$("q").value, u=$("url").value, c=$("crit").value;
+  if (!q || !u) return toast("Pertanyaan dan URL wajib");
+  await write("create_market", [q,u,c], "Buat market");
+  $("q").value=$("url").value=$("crit").value="";
+};
+
+refresh();
+</script>
+</body>
+</html>
