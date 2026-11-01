@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -7,7 +7,7 @@
 <style>
   :root{--bg:#0d0f14;--card:#171a22;--line:#262b38;--tx:#e8eaf0;--mut:#8a91a3;--yes:#2ecc8f;--no:#ff5c6c;--acc:#7c6cff}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,sans-serif}
+  body{-webkit-text-size-adjust:100%;text-size-adjust:100%;margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,sans-serif}
   .wrap{max-width:860px;margin:0 auto;padding:16px}
   h1{font-size:20px;margin:8px 0}
   .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px}
@@ -31,60 +31,62 @@
 <div class="wrap">
   <div class="bar">
     <h1>🔮 AI Prediction Market</h1>
-    <div class="row"><span class="mut" id="acct"></span><b id="bal">0</b> <span class="mut">poin</span>
+    <div class="row"><span class="mut" id="acct"></span><b id="bal">0</b> <span class="mut">points</span>
+      <button class="ghost" id="connect">Connect wallet</button>
       <button class="ghost" id="faucet">Faucet</button></div>
   </div>
 
   <div class="card">
-    <div class="mut">Alamat kontrak (Studionet)</div>
-    <div class="row"><input id="addr" placeholder="0x..." style="flex:1"><button id="saveAddr">Simpan</button></div>
+    <div class="mut">Contract address (Studionet)</div>
+    <div class="row"><input id="addr" placeholder="0x..." style="flex:1"><button id="saveAddr">Save</button></div>
   </div>
 
   <div class="card">
-    <b>Buat market</b>
-    <input id="q" placeholder="Pertanyaan (mis. Apakah BTC > $100k pada 1 Des 2026?)">
-    <input id="url" placeholder="URL sumber bukti (https://...)">
-    <textarea id="crit" rows="2" placeholder="Kriteria resolusi (opsional)"></textarea>
-    <button id="create">Buat</button>
+    <b>Create market</b>
+    <input id="q" placeholder="Question (e.g. Will BTC be above $100k on Dec 1, 2026?)">
+    <input id="url" placeholder="Evidence source URL (https://...)">
+    <textarea id="crit" rows="2" placeholder="Resolution criteria (optional)"></textarea>
+    <button id="create">Create</button>
   </div>
 
   <div class="row" style="justify-content:space-between;margin:8px 0">
-    <b>Daftar market</b><button class="ghost" id="reload">Refresh</button>
+    <b>Markets</b><button class="ghost" id="reload">Refresh</button>
   </div>
-  <div id="list"><div class="mut">Isi alamat kontrak dulu.</div></div>
+  <div id="list"><div class="mut">Enter the contract address first.</div></div>
 </div>
 <div id="toast"></div>
 
 <script type="module">
 import { createClient, createAccount } from "https://esm.sh/genlayer-js";
 import { studionet } from "https://esm.sh/genlayer-js/chains";
+import { getAddress } from "https://esm.sh/viem";
 
 const $ = id => document.getElementById(id);
 const toast = (t, ms=4000) => { const e=$("toast"); e.textContent=t; e.style.display="block"; clearTimeout(toast.t); toast.t=setTimeout(()=>e.style.display="none",ms); };
 
-// Akun lokal (disimpan di browser; hanya untuk testnet)
+// Local account (stored in the browser; testnet only)
 let pk = localStorage.getItem("apm_pk");
 if (!pk) { const a = createAccount(); pk = a.privateKey ?? null; }
 const account = pk ? createAccount(pk) : createAccount();
 if (!localStorage.getItem("apm_pk") && account.privateKey) localStorage.setItem("apm_pk", account.privateKey);
-const me = account.address;
+let me = account.address;
 $("acct").textContent = me.slice(0,6)+"…"+me.slice(-4);
 
-const client = createClient({ chain: studionet, account });
+let client = createClient({ chain: studionet, account });
 const DEFAULT_ADDR = "0x03eF48a8Fb6f949d7fecD24Be0F7b68fDCFb1fc6";
 let ADDR = localStorage.getItem("apm_addr2") || DEFAULT_ADDR;
 $("addr").value = ADDR;
 
 const read = (fn, args=[]) => client.readContract({ address: ADDR, functionName: fn, args });
-async function write(fn, args=[], label="Transaksi") {
-  if (!ADDR) return toast("Isi alamat kontrak dulu");
+async function write(fn, args=[], label="Transaction") {
+  if (!ADDR) return toast("Enter the contract address first");
   const btns=[...document.querySelectorAll("button")]; btns.forEach(b=>b.disabled=true);
   try {
-    toast(label+" dikirim…", 60000);
+    toast(label+" sent…", 60000);
     const hash = await client.writeContract({ address: ADDR, functionName: fn, args, value: 0n });
     await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 120, interval: 3000 });
-    toast(label+" berhasil ✓");
-  } catch (e) { toast("Gagal: "+(e.shortMessage||e.message||e), 7000); }
+    toast(label+" succeeded ✓");
+  } catch (e) { toast("Failed: "+(e.shortMessage||e.message||e), 7000); }
   finally { btns.forEach(b=>b.disabled=false); await refresh(); }
 }
 
@@ -94,13 +96,13 @@ async function refresh() {
     $("bal").textContent = String(await read("get_balance", [me]));
     const ms = JSON.parse(await read("get_markets"));
     render(ms.reverse());
-  } catch (e) { toast("Gagal memuat: "+(e.shortMessage||e.message), 6000); }
+  } catch (e) { toast("Failed to load: "+(e.shortMessage||e.message), 6000); }
 }
 
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 async function render(ms) {
-  if (!ms.length) { $("list").innerHTML = '<div class="mut">Belum ada market.</div>'; return; }
+  if (!ms.length) { $("list").innerHTML = '<div class="mut">No markets yet.</div>'; return; }
   const parts = await Promise.all(ms.map(async m => {
     const tot = m.yes_pool + m.no_pool;
     const pct = tot ? Math.round(m.yes_pool/tot*100) : 50;
@@ -111,9 +113,9 @@ async function render(ms) {
       <div class="row" style="justify-content:space-between">
         <b>#${m.id} ${esc(m.question)}</b>
         <span class="badge ${m.outcome}">${open ? "OPEN" : m.outcome}</span></div>
-      <div class="mut"><a href="${esc(m.url)}" target="_blank" rel="noopener">sumber bukti</a>${m.criteria ? " · "+esc(m.criteria) : ""}</div>
+      <div class="mut"><a href="${esc(m.url)}" target="_blank" rel="noopener">evidence source</a>${m.criteria ? " · "+esc(m.criteria) : ""}</div>
       <div class="meter"><i style="width:${pct}%"></i></div>
-      <div class="row mut"><span>YES ${m.yes_pool} (${pct}%)</span><span>NO ${m.no_pool}</span><span>Posisi kamu: Y ${pos.yes} / N ${pos.no}</span></div>
+      <div class="row mut"><span>YES ${m.yes_pool} (${pct}%)</span><span>NO ${m.no_pool}</span><span>Your position: Y ${pos.yes} / N ${pos.no}</span></div>
       ${open ? `<div class="row" style="margin-top:8px">
         <input id="amt-${m.id}" type="number" min="1" value="100" style="width:100px">
         <button class="yes" data-a="bet" data-id="${m.id}" data-s="YES">YES</button>
@@ -121,7 +123,7 @@ async function render(ms) {
         <button class="ghost" data-a="resolve" data-id="${m.id}">Resolve (AI)</button></div>`
       : `<div class="mut" style="margin-top:6px">AI (${m.confidence}%): ${esc(m.reason)}</div>
          ${m.evidence ? `<div class="mut" style="margin-top:4px">Evidence ${m.evidence_verified ? "✓ found on page" : "⚠ not found on page"}: “${esc(m.evidence)}”</div>` : ""}
-         <button data-a="claim" data-id="${m.id}" style="margin-top:6px">Klaim</button>`}
+         <button data-a="claim" data-id="${m.id}" style="margin-top:6px">Claim</button>`}
     </div>`;
   }));
   $("list").innerHTML = parts.join("");
@@ -134,18 +136,33 @@ $("list").addEventListener("click", e => {
     const amt = parseInt($("amt-"+id).value || "0");
     write("bet", [id, b.dataset.s, amt], "Bet "+b.dataset.s);
   } else if (b.dataset.a === "resolve") {
-    toast("AI sedang menilai bukti… (bisa 1–2 menit)", 90000);
+    toast("AI is evaluating the evidence… (can take 1–2 min)", 90000);
     write("resolve_market", [id], "Resolve");
-  } else write("claim", [id], "Klaim");
+  } else write("claim", [id], "Claim");
 });
 
 $("saveAddr").onclick = () => { ADDR = $("addr").value.trim(); localStorage.setItem("apm_addr2", ADDR); refresh(); };
+$("connect").onclick = async () => {
+  if (!window.ethereum) return toast("No wallet found. Install MetaMask or open in a wallet browser.", 6000);
+  try {
+    const [raw] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    const addr = getAddress(raw);
+    client = createClient({ chain: studionet, account: addr });
+    try { await client.connect("studionet"); } catch (e) { console.warn("network switch:", e); }
+    me = addr;
+    $("acct").textContent = me.slice(0,6)+"…"+me.slice(-4);
+    $("connect").textContent = "Wallet connected";
+    toast("Wallet connected ✓");
+    await refresh();
+  } catch (e) { toast("Failed: "+(e.shortMessage||e.message||e), 7000); }
+};
+if (window.ethereum) window.ethereum.on?.("accountsChanged", () => location.reload());
 $("faucet").onclick = () => write("claim_faucet", [], "Faucet");
 $("reload").onclick = refresh;
 $("create").onclick = async () => {
   const q=$("q").value, u=$("url").value, c=$("crit").value;
-  if (!q || !u) return toast("Pertanyaan dan URL wajib");
-  await write("create_market", [q,u,c], "Buat market");
+  if (!q || !u) return toast("Question and URL are required");
+  await write("create_market", [q,u,c], "Create market");
   $("q").value=$("url").value=$("crit").value="";
 };
 
