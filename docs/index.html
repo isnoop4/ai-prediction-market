@@ -25,12 +25,43 @@
   .meter i{display:block;height:100%;background:var(--yes)}
   #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#000;border:1px solid var(--line);padding:10px 16px;border-radius:10px;display:none;max-width:90%}
   a{color:var(--acc)}
+  #bal{display:inline-block}
+  #progress{position:fixed;top:0;left:0;height:3px;width:40%;background:linear-gradient(90deg,transparent,var(--acc),var(--yes));opacity:0;transition:opacity .2s;z-index:10;pointer-events:none}
+  button{transition:transform .15s ease,box-shadow .2s ease,filter .2s ease,opacity .2s}
+  button:not(:disabled):hover{transform:translateY(-1px);filter:brightness(1.1);box-shadow:0 6px 18px -6px var(--acc)}
+  button.yes:not(:disabled):hover{box-shadow:0 6px 18px -6px var(--yes)}
+  button.no:not(:disabled):hover{box-shadow:0 6px 18px -6px var(--no)}
+  button:not(:disabled):active{transform:scale(.96)}
+  button.claimed:disabled,button.nowin:disabled{background:transparent;border:1px solid var(--line);color:var(--mut);cursor:default;opacity:.85}
+  .card{transition:border-color .25s}
+  .card:hover{border-color:#3a4156}
+  @media (prefers-reduced-motion:no-preference){
+    body::before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;background:radial-gradient(40% 40% at 20% 20%,rgba(124,108,255,.18),transparent 70%),radial-gradient(35% 35% at 80% 30%,rgba(46,204,143,.12),transparent 70%),radial-gradient(40% 40% at 50% 90%,rgba(255,92,108,.10),transparent 70%);animation:drift 18s ease-in-out infinite alternate}
+    @keyframes drift{to{transform:translate3d(3%,4%,0) scale(1.08)}}
+    .enter{animation:rise .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0)*70ms)}
+    @keyframes rise{from{opacity:0;transform:translateY(14px)}}
+    .enter .meter i{animation:fill .9s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0)*70ms + .2s)}
+    @keyframes fill{from{width:0}}
+    .badge.YES,.badge.NO{animation:pop .45s cubic-bezier(.3,1.6,.5,1) both}
+    @keyframes pop{from{transform:scale(.6);opacity:0}}
+    button.claimable{animation:glow 1.8s ease-in-out infinite}
+    @keyframes glow{50%{box-shadow:0 0 18px 2px rgba(124,108,255,.55)}}
+    #toast.show{animation:toastIn .3s cubic-bezier(.2,.8,.2,1)}
+    @keyframes toastIn{from{opacity:0;transform:translate(-50%,12px)}}
+    #progress.on{opacity:1;animation:slide 1.2s ease-in-out infinite}
+    @keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
+    h1 .orb{display:inline-block;animation:float 3s ease-in-out infinite}
+    @keyframes float{50%{transform:translateY(-3px)}}
+    #bal.bump{animation:bump .5s}
+    @keyframes bump{40%{transform:scale(1.25);color:var(--yes)}}
+  }
 </style>
 </head>
 <body>
+<div id="progress"></div>
 <div class="wrap">
   <div class="bar">
-    <h1>🔮 AI Prediction Market</h1>
+    <h1><span class="orb">🔮</span> AI Prediction Market</h1>
     <div class="row"><span class="mut" id="acct"></span><b id="bal">0</b> <span class="mut">points</span>
       <button class="ghost" id="connect">Connect wallet</button>
       <button class="ghost" id="faucet">Faucet</button></div>
@@ -62,7 +93,7 @@ import { studionet } from "https://esm.sh/genlayer-js/chains";
 import { getAddress } from "https://esm.sh/viem";
 
 const $ = id => document.getElementById(id);
-const toast = (t, ms=4000) => { const e=$("toast"); e.textContent=t; e.style.display="block"; clearTimeout(toast.t); toast.t=setTimeout(()=>e.style.display="none",ms); };
+const toast = (t, ms=4000) => { const e=$("toast"); e.textContent=t; e.style.display="block"; e.classList.remove("show"); void e.offsetWidth; e.classList.add("show"); clearTimeout(toast.t); toast.t=setTimeout(()=>e.style.display="none",ms); };
 
 // Local account (stored in the browser; testnet only)
 let pk = localStorage.getItem("apm_pk");
@@ -80,20 +111,21 @@ $("addr").value = ADDR;
 const read = (fn, args=[]) => client.readContract({ address: ADDR, functionName: fn, args });
 async function write(fn, args=[], label="Transaction") {
   if (!ADDR) return toast("Enter the contract address first");
-  const btns=[...document.querySelectorAll("button")]; btns.forEach(b=>b.disabled=true);
+  const btns=[...document.querySelectorAll("button")].filter(b=>!b.disabled); btns.forEach(b=>b.disabled=true);
+  $("progress").classList.add("on");
   try {
     toast(label+" sent…", 60000);
     const hash = await client.writeContract({ address: ADDR, functionName: fn, args, value: 0n });
     await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 120, interval: 3000 });
-    toast(label+" succeeded ✓");
+    toast(label+" succeeded ✓"); if (fn==="claim") confetti();
   } catch (e) { toast("Failed: "+(e.shortMessage||e.message||e), 7000); }
-  finally { btns.forEach(b=>b.disabled=false); await refresh(); }
+  finally { $("progress").classList.remove("on"); btns.forEach(b=>b.disabled=false); await refresh(); }
 }
 
 async function refresh() {
   if (!ADDR) return;
   try {
-    $("bal").textContent = String(await read("get_balance", [me]));
+    setBal(Number(await read("get_balance", [me])));
     const ms = JSON.parse(await read("get_markets"));
     render(ms.reverse());
   } catch (e) { toast("Failed to load: "+(e.shortMessage||e.message), 6000); }
@@ -101,15 +133,61 @@ async function refresh() {
 
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
+let shownBal = 0, animateNext = true;
+const reduced = () => matchMedia("(prefers-reduced-motion:reduce)").matches;
+
+function setBal(n) {
+  const el=$("bal"), from=shownBal, t0=performance.now();
+  shownBal = n;
+  if (from===n || reduced()) { el.textContent = n; return; }
+  const step = t => { const k=Math.min(1,(t-t0)/700); el.textContent = Math.round(from+(n-from)*(1-Math.pow(1-k,3))); if (k<1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+  el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump");
+}
+
+function confetti() {
+  if (reduced()) return;
+  const c=document.createElement("canvas"), dpr=devicePixelRatio||1;
+  c.style.cssText="position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:50";
+  c.width=innerWidth*dpr; c.height=innerHeight*dpr; document.body.appendChild(c);
+  const g=c.getContext("2d"); g.scale(dpr,dpr);
+  const cols=["#7c6cff","#2ecc8f","#ff5c6c","#ffd166","#4cc9f0"];
+  const ps=Array.from({length:90},()=>({x:innerWidth/2,y:innerHeight*0.6,vx:(Math.random()-.5)*12,vy:-Math.random()*13-4,s:4+Math.random()*5,r:Math.random()*6,vr:(Math.random()-.5)*.4,c:cols[Math.random()*cols.length|0]}));
+  const t0=performance.now();
+  (function frame(t){
+    const k=(t-t0)/1800; g.clearRect(0,0,innerWidth,innerHeight);
+    for (const p of ps) { p.vy+=.35; p.x+=p.vx; p.y+=p.vy; p.r+=p.vr; g.save(); g.globalAlpha=Math.max(0,1-k); g.translate(p.x,p.y); g.rotate(p.r); g.fillStyle=p.c; g.fillRect(-p.s/2,-p.s/2,p.s,p.s*.6); g.restore(); }
+    if (k<1) requestAnimationFrame(frame); else c.remove();
+  })(t0);
+}
+
+function payoutFor(m, pos) {
+  const tot = m.yes_pool + m.no_pool;
+  if (m.outcome === "INVALID") return pos.yes + pos.no;
+  const win = m.outcome === "YES" ? m.yes_pool : m.no_pool;
+  const stake = m.outcome === "YES" ? pos.yes : pos.no;
+  if (win === 0) return pos.yes + pos.no;
+  return stake > 0 ? Math.floor(stake * tot / win) : 0;
+}
+
+function claimBtn(m, pos) {
+  const st = 'style="margin-top:6px"';
+  if (pos.claimed) return `<button class="claimed" disabled ${st}>Claimed ✓</button>`;
+  const pay = payoutFor(m, pos);
+  if (pay <= 0) return `<button class="nowin" disabled ${st}>${pos.yes+pos.no > 0 ? "No winnings" : "No position"}</button>`;
+  return `<button class="claimable" data-a="claim" data-id="${m.id}" ${st}>Claim +${pay}</button>`;
+}
+
 async function render(ms) {
   if (!ms.length) { $("list").innerHTML = '<div class="mut">No markets yet.</div>'; return; }
-  const parts = await Promise.all(ms.map(async m => {
+  const anim = animateNext; animateNext = false;
+  const parts = await Promise.all(ms.map(async (m, i) => {
     const tot = m.yes_pool + m.no_pool;
     const pct = tot ? Math.round(m.yes_pool/tot*100) : 50;
     let pos = {yes:0,no:0,claimed:0};
     try { pos = JSON.parse(await read("get_position", [m.id, me])); } catch {}
     const open = m.status === "OPEN";
-    return `<div class="card">
+    return `<div class="card${anim ? " enter" : ""}" style="--i:${i}">
       <div class="row" style="justify-content:space-between">
         <b>#${m.id} ${esc(m.question)}</b>
         <span class="badge ${m.outcome}">${open ? "OPEN" : m.outcome}</span></div>
@@ -123,7 +201,7 @@ async function render(ms) {
         <button class="ghost" data-a="resolve" data-id="${m.id}">Resolve (AI)</button></div>`
       : `<div class="mut" style="margin-top:6px">AI (${m.confidence}%): ${esc(m.reason)}</div>
          ${m.evidence ? `<div class="mut" style="margin-top:4px">Evidence ${m.evidence_verified ? "✓ found on page" : "⚠ not found on page"}: “${esc(m.evidence)}”</div>` : ""}
-         <button data-a="claim" data-id="${m.id}" style="margin-top:6px">Claim</button>`}
+         ${claimBtn(m, pos)}`}
     </div>`;
   }));
   $("list").innerHTML = parts.join("");
@@ -141,7 +219,7 @@ $("list").addEventListener("click", e => {
   } else write("claim", [id], "Claim");
 });
 
-$("saveAddr").onclick = () => { ADDR = $("addr").value.trim(); localStorage.setItem("apm_addr2", ADDR); refresh(); };
+$("saveAddr").onclick = () => { ADDR = $("addr").value.trim(); localStorage.setItem("apm_addr2", ADDR); animateNext = true; refresh(); };
 $("connect").onclick = async () => {
   if (!window.ethereum) return toast("No wallet found. Install MetaMask or open in a wallet browser.", 6000);
   try {
@@ -158,7 +236,7 @@ $("connect").onclick = async () => {
 };
 if (window.ethereum) window.ethereum.on?.("accountsChanged", () => location.reload());
 $("faucet").onclick = () => write("claim_faucet", [], "Faucet");
-$("reload").onclick = refresh;
+$("reload").onclick = () => { animateNext = true; refresh(); };
 $("create").onclick = async () => {
   const q=$("q").value, u=$("url").value, c=$("crit").value;
   if (!q || !u) return toast("Question and URL are required");
